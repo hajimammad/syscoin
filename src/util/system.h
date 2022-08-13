@@ -36,41 +36,22 @@
 #include <vector>
 
 // SYSCOIN
-#include <ctpl.h>
-#include <amount.h>
+#include <consensus/amount.h>
 class JSONRPCRequest;
 extern bool fMasternodeMode;
-extern bool bGethTestnet;
 extern bool fDisableGovernance;
 extern bool fRegTest;
 extern bool fSigNet;
-extern uint32_t fGethSyncHeight;
 extern uint32_t fGethCurrentHeight;
 extern std::string fGethSyncStatus;
+extern bool fNEVMConnection;
 extern bool fGethSynced;
 extern bool fLoaded;
-extern pid_t gethPID;
-extern pid_t relayerPID;
-extern int64_t nLastGethHeaderTime;
-extern int64_t nRandomResetSec;
 extern bool fAssetIndex;
 extern int32_t DEFAULT_MN_COLLATERAL_REQUIRED;
 extern int64_t DEFAULT_MAX_RECOVERED_SIGS_AGE;
 extern CAmount nMNCollateralRequired;
-typedef struct {
-    // Values from /proc/meminfo, in KiB or converted to MiB.
-    long MemTotalKiB;
-    int MemTotalMiB;
-    int MemAvailableMiB; // -1 means no data available
-    int SwapTotalMiB;
-    long SwapTotalKiB;
-    int SwapFreeMiB;
-    // Calculated percentages
-    int MemAvailablePercent; // percent of total memory that is available
-    int SwapFreePercent; // percent of total swap that is free
-} meminfo_t;
-
-meminfo_t parse_meminfo();
+extern uint32_t nLastKnownHeightOnStart;
 class UniValue;
 
 // Application startup time (used for uptime calculation)
@@ -126,13 +107,12 @@ void ReleaseDirectoryLocks();
 
 bool TryCreateDirectories(const fs::path& p);
 bool ExistsOldAssetDir();
+bool ExistsOldEthDir();
 void DeleteOldAssetDir();
+void DeleteOldEthDir();
 fs::path GetDefaultDataDir();
 // SYSCOIN
-fs::path GetGethPidFile();
-bool CheckSpecs(std::string &errMsg, bool bMiner = false);
-fs::path GetRelayerPidFile();
-std::string GetRelayerFilename();
+std::string GetDefaultPubNEVM();
 std::string GetGethFilename();
 // Return true if -datadir option points to a valid directory or is not specified.
 bool CheckDataDirOption();
@@ -146,7 +126,6 @@ std::string ShellEscape(const std::string& arg);
 #if HAVE_SYSTEM
 void runCommand(const std::string& strCommand);
 #endif
-#ifdef ENABLE_EXTERNAL_SIGNER
 /**
  * Execute a command which returns JSON, and parse the result.
  *
@@ -155,7 +134,6 @@ void runCommand(const std::string& strCommand);
  * @return parsed JSON
  */
 UniValue RunCommandParseJSON(const std::string& str_command, const std::string& str_std_in="");
-#endif // ENABLE_EXTERNAL_SIGNER
 
 /**
  * Most paths passed as configuration arguments are treated as relative to
@@ -204,12 +182,18 @@ struct SectionInfo
 class ArgsManager
 {
 public:
+    /**
+     * Flags controlling how config and command line arguments are validated and
+     * interpreted.
+     */
     enum Flags : uint32_t {
-        // Boolean options can accept negation syntax -noOPTION or -noOPTION=1
-        ALLOW_BOOL = 0x01,
-        ALLOW_INT = 0x02,
-        ALLOW_STRING = 0x04,
-        ALLOW_ANY = ALLOW_BOOL | ALLOW_INT | ALLOW_STRING,
+        ALLOW_ANY = 0x01,         //!< disable validation
+        // ALLOW_BOOL = 0x02,     //!< unimplemented, draft implementation in #16545
+        // ALLOW_INT = 0x04,      //!< unimplemented, draft implementation in #16545
+        // ALLOW_STRING = 0x08,   //!< unimplemented, draft implementation in #16545
+        // ALLOW_LIST = 0x10,     //!< unimplemented, draft implementation in #16545
+        DISALLOW_NEGATION = 0x20, //!< disallow -nofoo syntax
+
         DEBUG_ONLY = 0x100,
         /* Some options would cause cross-contamination if values for
          * mainnet were used while running on regtest/testnet (or vice-versa).
@@ -251,6 +235,7 @@ protected:
      */
     bool UseDefaultSection(const std::string& arg) const EXCLUSIVE_LOCKS_REQUIRED(cs_args);
 
+ public:
     /**
      * Get setting value.
      *
@@ -265,7 +250,6 @@ protected:
      */
     std::vector<util::SettingsValue> GetSettingsList(const std::string& arg) const;
 
-public:
     ArgsManager();
     ~ArgsManager();
 
@@ -373,7 +357,7 @@ public:
      * @param nDefault (e.g. 1)
      * @return command-line argument (0 if invalid number) or default value
      */
-    int64_t GetArg(const std::string& strArg, int64_t nDefault) const;
+    int64_t GetIntArg(const std::string& strArg, int64_t nDefault) const;
 
     /**
      * Return boolean argument or default value
@@ -420,7 +404,7 @@ public:
     /**
      * Add subcommand
      */
-    void AddCommand(const std::string& cmd, const std::string& help, const OptionsCategory& cat);
+    void AddCommand(const std::string& cmd, const std::string& help);
 
     /**
      * Add many hidden arguments

@@ -29,7 +29,7 @@ void CMasternodeMetaInfo::AddGovernanceVote(const uint256& nGovernanceObjectHash
     LOCK(cs);
     // Insert a zero value, or not. Then increment the value regardless. This
     // ensures the value is in the map.
-    const auto& pair = mapGovernanceObjectsVotedOn.try_emplace(nGovernanceObjectHash, 0);
+    const auto& pair = mapGovernanceObjectsVotedOn.emplace(nGovernanceObjectHash, 0);
     pair.first->second++;
 }
 
@@ -50,13 +50,12 @@ CMasternodeMetaInfoPtr CMasternodeMetaMan::GetMetaInfo(const uint256& proTxHash,
     if (!fCreate) {
         return nullptr;
     }
-    it = metaInfos.try_emplace(proTxHash, std::make_shared<CMasternodeMetaInfo>(proTxHash)).first;
+    it = metaInfos.emplace(proTxHash, std::make_shared<CMasternodeMetaInfo>(proTxHash)).first;
     return it->second;
 }
 
 bool CMasternodeMetaMan::AddGovernanceVote(const uint256& proTxHash, const uint256& nGovernanceObjectHash)
 {
-    LOCK(cs);
     auto mm = GetMetaInfo(proTxHash);
     mm->AddGovernanceVote(nGovernanceObjectHash);
     return true;
@@ -65,7 +64,7 @@ bool CMasternodeMetaMan::AddGovernanceVote(const uint256& proTxHash, const uint2
 void CMasternodeMetaMan::RemoveGovernanceObject(const uint256& nGovernanceObjectHash)
 {
     LOCK(cs);
-    for(auto& p : metaInfos) {
+    for(const auto& p : metaInfos) {
         p.second->RemoveGovernanceObject(nGovernanceObjectHash);
     }
 }
@@ -85,15 +84,10 @@ void CMasternodeMetaMan::Clear()
     vecDirtyGovernanceObjectHashes.clear();
 }
 
-void CMasternodeMetaMan::CheckAndRemove()
-{
-
-}
-
 std::string CMasternodeMetaMan::ToString() const
 {
     std::ostringstream info;
-
+    LOCK(cs);
     info << "Masternodes: meta infos object count: " << (int)metaInfos.size();
     return info.str();
 }

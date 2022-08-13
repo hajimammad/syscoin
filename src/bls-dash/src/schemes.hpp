@@ -37,6 +37,7 @@ class Bytes;
 class CoreMPL {
 
 public:
+    virtual ~CoreMPL() {};
     CoreMPL() = delete;
     CoreMPL(const std::string& strId) : strCiphersuiteId(strId) {}
     // Generates a private key from a seed, similar to HD key generation
@@ -114,6 +115,7 @@ protected:
 
 class BasicSchemeMPL : public CoreMPL {
 public:
+    virtual ~BasicSchemeMPL() {};
     static const std::string CIPHERSUITE_ID;
     BasicSchemeMPL() : CoreMPL(BasicSchemeMPL::CIPHERSUITE_ID) {}
     bool AggregateVerify(const vector<vector<uint8_t>> &pubkeys,
@@ -136,6 +138,7 @@ public:
 class AugSchemeMPL : public CoreMPL {
 
 public:
+    virtual ~AugSchemeMPL() {};
     static const std::string CIPHERSUITE_ID;
     AugSchemeMPL() : CoreMPL(AugSchemeMPL::CIPHERSUITE_ID) {}
 
@@ -189,6 +192,7 @@ public:
 class PopSchemeMPL : public CoreMPL {
 
 public:
+    virtual ~PopSchemeMPL() {};
     static const std::string CIPHERSUITE_ID;
     static const std::string POP_CIPHERSUITE_ID;
     PopSchemeMPL() : CoreMPL(PopSchemeMPL::CIPHERSUITE_ID) {}
@@ -222,8 +226,9 @@ public:
  * This scheme reflects the Sign/Verify behaviour of older bls-signatures library versions (<0.1.29).
  */
 class LegacySchemeMPL : public CoreMPL {
-
+    using CoreMPL::Aggregate;
 public:
+    virtual ~LegacySchemeMPL() {};
     LegacySchemeMPL() : CoreMPL(std::string{}) {}
 
     virtual vector<uint8_t> SkToPk(const PrivateKey &seckey) final { throw std::runtime_error("Not supported in LegacySchemeMPL"); }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2014-2020 The Bitcoin Core developers
+# Copyright (c) 2014-2021 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the wallet keypool and interaction with wallet encryption/locking."""
@@ -90,8 +90,8 @@ class KeyPoolTest(SyscoinTestFramework):
         nodes[0].walletlock()
         wi = nodes[0].getwalletinfo()
         if self.options.descriptors:
-            assert_equal(wi['keypoolsize_hd_internal'], 18)
-            assert_equal(wi['keypoolsize'], 18)
+            assert_equal(wi['keypoolsize_hd_internal'], 24)
+            assert_equal(wi['keypoolsize'], 24)
         else:
             assert_equal(wi['keypoolsize_hd_internal'], 6)
             assert_equal(wi['keypoolsize'], 6)
@@ -138,11 +138,25 @@ class KeyPoolTest(SyscoinTestFramework):
         nodes[0].keypoolrefill(100)
         wi = nodes[0].getwalletinfo()
         if self.options.descriptors:
-            assert_equal(wi['keypoolsize_hd_internal'], 300)
-            assert_equal(wi['keypoolsize'], 300)
+            assert_equal(wi['keypoolsize_hd_internal'], 400)
+            assert_equal(wi['keypoolsize'], 400)
         else:
             assert_equal(wi['keypoolsize_hd_internal'], 100)
             assert_equal(wi['keypoolsize'], 100)
+
+        if not self.options.descriptors:
+            # Check that newkeypool entirely flushes the keypool
+            start_keypath = nodes[0].getaddressinfo(nodes[0].getnewaddress())['hdkeypath']
+            start_change_keypath = nodes[0].getaddressinfo(nodes[0].getrawchangeaddress())['hdkeypath']
+            # flush keypool and get new addresses
+            nodes[0].newkeypool()
+            end_keypath = nodes[0].getaddressinfo(nodes[0].getnewaddress())['hdkeypath']
+            end_change_keypath = nodes[0].getaddressinfo(nodes[0].getrawchangeaddress())['hdkeypath']
+            # The new keypath index should be 100 more than the old one
+            new_index = int(start_keypath.rsplit('/',  1)[1][:-1]) + 100
+            new_change_index = int(start_change_keypath.rsplit('/',  1)[1][:-1]) + 100
+            assert_equal(end_keypath, "m/0'/0'/" + str(new_index) + "'")
+            assert_equal(end_change_keypath, "m/0'/1'/" + str(new_change_index) + "'")
 
         # create a blank wallet
         nodes[0].createwallet(wallet_name='w2', blank=True, disable_private_keys=True)
@@ -162,12 +176,12 @@ class KeyPoolTest(SyscoinTestFramework):
         w1.walletpassphrase('test', 100)
 
         res = w1.sendtoaddress(address=address, amount=0.00010000)
-        nodes[0].generate(1)
+        self.generate(self.nodes[0], 1, sync_fun=self.no_op)
         destination = addr.pop()
 
         # Using a fee rate (10 sat / byte) well above the minimum relay rate
         # creating a 5,000 sat transaction with change should not be possible
-        assert_raises_rpc_error(-4, "Transaction needs a change address, but we can't generate it. Please call keypoolrefill first.", w2.walletcreatefundedpsbt, inputs=[], outputs=[{addr.pop(): 0.00005000}], options={"subtractFeeFromOutputs": [0], "feeRate": 0.00010})
+        assert_raises_rpc_error(-4, "Transaction needs a change address, but we can't generate it.", w2.walletcreatefundedpsbt, inputs=[], outputs=[{addr.pop(): 0.00005000}], options={"subtractFeeFromOutputs": [0], "feeRate": 0.00010})
 
         # creating a 10,000 sat transaction without change, with a manual input, should still be possible
         res = w2.walletcreatefundedpsbt(inputs=w2.listunspent(), outputs=[{destination: 0.00010000}], options={"subtractFeeFromOutputs": [0], "feeRate": 0.00010})
@@ -185,7 +199,7 @@ class KeyPoolTest(SyscoinTestFramework):
         assert_equal("psbt" in res, True)
 
         # create a transaction without change at the maximum fee rate, such that the output is still spendable:
-        res = w2.walletcreatefundedpsbt(inputs=[], outputs=[{destination: 0.00010000}], options={"subtractFeeFromOutputs": [0], "feeRate": 0.0008824})
+        res = w2.walletcreatefundedpsbt(inputs=[], outputs=[{destination: 0.00010000}], options={"subtractFeeFromOutputs": [0], "feeRate": 0.0008823})
         assert_equal("psbt" in res, True)
         assert_equal(res["fee"], Decimal("0.00009706"))
 
@@ -206,23 +220,23 @@ def test_auxpow(self, nodes):
     nodes[0].keypoolrefill(1)
     nodes[0].walletlock()
     if self.options.descriptors:
-        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 13)
+        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 19)
     else:
         assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 1)
 
     nodes[0].getauxblock()
     if self.options.descriptors:
-        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 12)
+        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 18)
     else:
         assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 0)
-    nodes[0].generate(1)
+    self.generate(nodes[0], 1)
     if self.options.descriptors:
-        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 12)
+        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 18)
     else:
         assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 0)
     auxblock = nodes[0].getauxblock()
     if self.options.descriptors:
-        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 12)
+        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 18)
     else:
         assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 0)
 
@@ -231,7 +245,7 @@ def test_auxpow(self, nodes):
     res = nodes[0].getauxblock(auxblock['hash'], solved)
     assert res
     if self.options.descriptors:
-        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 12)
+        assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 18)
     else:
         assert_equal (nodes[0].getwalletinfo()['keypoolsize'], 0)
 

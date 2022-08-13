@@ -21,16 +21,16 @@
 #undef DOUBLE
 
 #include <array>
-#include <sync.h>
+#include <mutex>
 #include <unistd.h>
 
-static const bool fLegacyDefault{true};
+static constexpr bool fLegacyDefault{true};
 
 // reversed BLS12-381
-#define BLS_CURVE_ID_SIZE 32
-#define BLS_CURVE_SECKEY_SIZE 32
-#define BLS_CURVE_PUBKEY_SIZE 48
-#define BLS_CURVE_SIG_SIZE 96
+constexpr int BLS_CURVE_ID_SIZE{32};
+constexpr int BLS_CURVE_SECKEY_SIZE{32};
+constexpr int BLS_CURVE_PUBKEY_SIZE{48};
+constexpr int BLS_CURVE_SIG_SIZE{96};
 
 class CBLSSignature;
 class CBLSPublicKey;
@@ -42,7 +42,7 @@ class CBLSWrapper
     friend class CBLSPublicKey;
     friend class CBLSSignature;
 
-    bool fLegacy;
+    bool fLegacy{true};
 
 protected:
     ImplType impl;
@@ -52,7 +52,7 @@ protected:
     inline constexpr size_t GetSerSize() const { return SerSize; }
 
 public:
-    static const size_t SerSize = _SerSize;
+    static constexpr size_t SerSize = _SerSize;
 
     explicit CBLSWrapper(const bool fLegacyIn = fLegacyDefault) : fLegacy(fLegacyIn)
     {
@@ -61,7 +61,6 @@ public:
     {
         SetByteVector(vecBytes);
     }
-    virtual ~CBLSWrapper() {}
 
     CBLSWrapper(const CBLSWrapper& ref) = default;
     CBLSWrapper& operator=(const CBLSWrapper& ref) = default;
@@ -81,6 +80,8 @@ public:
         return *this;
     }
 
+    virtual ~CBLSWrapper() = default;
+
     bool operator==(const C& r) const
     {
         return fValid == r.fValid && impl == r.impl;
@@ -97,7 +98,7 @@ public:
 
     void Reset()
     {
-        *((C*)this) = C(fLegacy);
+        *(static_cast<C*>(this)) = C(fLegacy);
     }
 
     void SetByteVector(const std::vector<uint8_t>& vecBytes)
@@ -299,7 +300,7 @@ template<typename BLSObject>
 class CBLSLazyWrapper
 {
 private:
-    mutable RecursiveMutex mutex;
+    mutable std::mutex mutex;
 
     mutable std::vector<uint8_t> vecBytes;
     mutable bool bufValid{false};
@@ -321,10 +322,11 @@ public:
     {
         *this = r;
     }
+    virtual ~CBLSLazyWrapper() = default;
 
     CBLSLazyWrapper& operator=(const CBLSLazyWrapper& r)
     {
-        LOCK(r.mutex);
+        std::unique_lock<std::mutex> l(r.mutex);
         bufValid = r.bufValid;
         if (r.bufValid) {
             vecBytes = r.vecBytes;
@@ -349,7 +351,7 @@ public:
     template<typename Stream>
     inline void Serialize(Stream& s) const
     {
-        LOCK(mutex);
+        std::unique_lock<std::mutex> l(mutex);
         if (!objInitialized && !bufValid) {
             throw std::ios_base::failure("obj and buf not initialized");
         }
@@ -364,7 +366,7 @@ public:
     template<typename Stream>
     inline void Unserialize(Stream& s)
     {
-        LOCK(mutex);
+        std::unique_lock<std::mutex> l(mutex);
         s.read((char*)vecBytes.data(), BLSObject::SerSize);
         bufValid = true;
         objInitialized = false;
@@ -373,7 +375,7 @@ public:
 
     void Set(const BLSObject& _obj)
     {
-        LOCK(mutex);
+        std::unique_lock<std::mutex> l(mutex);
         bufValid = false;
         objInitialized = true;
         obj = _obj;
@@ -381,7 +383,7 @@ public:
     }
     const BLSObject& Get() const
     {
-        LOCK(mutex);
+        std::unique_lock<std::mutex> l(mutex);
         static BLSObject invalidObj;
         if (!bufValid && !objInitialized) {
             return invalidObj;
@@ -417,7 +419,7 @@ public:
 
     uint256 GetHash() const
     {
-        LOCK(mutex);
+        std::unique_lock<std::mutex> l(mutex);
         if (!bufValid) {
             vecBytes = obj.ToByteVector();
             bufValid = true;
@@ -431,22 +433,22 @@ public:
         return hash;
     }
 };
-typedef CBLSLazyWrapper<CBLSSignature> CBLSLazySignature;
-typedef CBLSLazyWrapper<CBLSPublicKey> CBLSLazyPublicKey;
-typedef CBLSLazyWrapper<CBLSSecretKey> CBLSLazySecretKey;
+using CBLSLazySignature = CBLSLazyWrapper<CBLSSignature>;
+using CBLSLazyPublicKey = CBLSLazyWrapper<CBLSPublicKey>;
+using CBLSLazySecretKey = CBLSLazyWrapper<CBLSSecretKey>;
 #endif
 
-typedef std::vector<CBLSId> BLSIdVector;
-typedef std::vector<CBLSPublicKey> BLSVerificationVector;
-typedef std::vector<CBLSPublicKey> BLSPublicKeyVector;
-typedef std::vector<CBLSSecretKey> BLSSecretKeyVector;
-typedef std::vector<CBLSSignature> BLSSignatureVector;
+using BLSIdVector = std::vector<CBLSId>;
+using BLSVerificationVector = std::vector<CBLSPublicKey>;
+using BLSPublicKeyVector = std::vector<CBLSPublicKey>;
+using BLSSecretKeyVector = std::vector<CBLSSecretKey>;
+using BLSSignatureVector = std::vector<CBLSSignature>;
 
-typedef std::shared_ptr<BLSIdVector> BLSIdVectorPtr;
-typedef std::shared_ptr<BLSVerificationVector> BLSVerificationVectorPtr;
-typedef std::shared_ptr<BLSPublicKeyVector> BLSPublicKeyVectorPtr;
-typedef std::shared_ptr<BLSSecretKeyVector> BLSSecretKeyVectorPtr;
-typedef std::shared_ptr<BLSSignatureVector> BLSSignatureVectorPtr;
+using BLSIdVectorPtr = std::shared_ptr<BLSIdVector>;
+using BLSVerificationVectorPtr = std::shared_ptr<BLSVerificationVector>;
+using BLSPublicKeyVectorPtr = std::shared_ptr<BLSPublicKeyVector>;
+using BLSSecretKeyVectorPtr = std::shared_ptr<BLSSecretKeyVector>;
+using BLSSignatureVectorPtr = std::shared_ptr<BLSSignatureVector>;
 
 bool BLSInit();
 

@@ -14,7 +14,7 @@
 #include <net.h>
 #include <util/system.h>
 #include <validation.h>
-
+#include <node/transaction.h>
 #include <string>
 #include <univalue.h>
 
@@ -113,9 +113,7 @@ bool CGovernanceObject::ProcessVote(CNode* pfrom,
         exception = CGovernanceException(ostr.str(), GOVERNANCE_EXCEPTION_NONE);
         return false;
     }
-    CDeterministicMNList mnList;
-    if(deterministicMNManager)
-        deterministicMNManager->GetListAtChainTip(mnList);
+    auto mnList = deterministicMNManager->GetListAtChainTip();
     auto dmn = mnList.GetMNByCollateral(vote.GetMasternodeOutpoint());
 
     if (!dmn) {
@@ -125,7 +123,7 @@ bool CGovernanceObject::ProcessVote(CNode* pfrom,
         return false;
     }
 
-    auto it = mapCurrentMNVotes.try_emplace(vote.GetMasternodeOutpoint()).first;
+    auto it = mapCurrentMNVotes.emplace(vote_m_t::value_type(vote.GetMasternodeOutpoint(), vote_rec_t())).first;
     vote_rec_t& voteRecordRef = it->second;
     vote_signal_enum_t eSignal = vote.GetSignal();
     if (eSignal == VOTE_SIGNAL_NONE) {
@@ -142,7 +140,7 @@ bool CGovernanceObject::ProcessVote(CNode* pfrom,
         exception = CGovernanceException(ostr.str(), GOVERNANCE_EXCEPTION_PERMANENT_ERROR, 20);
         return false;
     }
-    auto it2 = voteRecordRef.mapInstances.try_emplace(int(eSignal)).first;
+    auto it2 = voteRecordRef.mapInstances.emplace(vote_instance_m_t::value_type(int(eSignal), vote_instance_t())).first;
     vote_instance_t& voteInstanceRef = it2->second;
 
     // Reject obsolete votes
@@ -171,7 +169,7 @@ bool CGovernanceObject::ProcessVote(CNode* pfrom,
 
     int64_t nNow = GetAdjustedTime();
     int64_t nVoteTimeUpdate = voteInstanceRef.nTime;
-    if (governance.AreRateChecksEnabled()) {
+    if (governance->AreRateChecksEnabled()) {
         int64_t nTimeDelta = nNow - voteInstanceRef.nTime;
         if (nTimeDelta < GOVERNANCE_UPDATE_MIN) {
             std::ostringstream ostr;
@@ -197,7 +195,7 @@ bool CGovernanceObject::ProcessVote(CNode* pfrom,
              << ", vote hash = " << vote.GetHash().ToString();
         LogPrintf("%s\n", ostr.str());
         exception = CGovernanceException(ostr.str(), GOVERNANCE_EXCEPTION_PERMANENT_ERROR, 20);
-        governance.AddInvalidVote(vote);
+        governance->AddInvalidVote(vote);
         return false;
     }
 
@@ -220,9 +218,7 @@ bool CGovernanceObject::ProcessVote(CNode* pfrom,
 void CGovernanceObject::ClearMasternodeVotes()
 {
     LOCK(cs);
-    CDeterministicMNList mnList;
-    if(deterministicMNManager)
-        deterministicMNManager->GetListAtChainTip(mnList);
+    auto mnList = deterministicMNManager->GetListAtChainTip();
 
     auto it = mapCurrentMNVotes.begin();
     while (it != mapCurrentMNVotes.end()) {
@@ -440,21 +436,21 @@ UniValue CGovernanceObject::ToJson() const
     return obj;
 }
 
-void CGovernanceObject::UpdateLocalValidity()
+void CGovernanceObject::UpdateLocalValidity(ChainstateManager &chainman)
 {
     // THIS DOES NOT CHECK COLLATERAL, THIS IS CHECKED UPON ORIGINAL ARRIVAL
-    fCachedLocalValidity = IsValidLocally(strLocalValidityError, false);
+    fCachedLocalValidity = IsValidLocally(chainman, strLocalValidityError, false);
 }
 
 
-bool CGovernanceObject::IsValidLocally(std::string& strError, bool fCheckCollateral) const
+bool CGovernanceObject::IsValidLocally(ChainstateManager &chainman, std::string& strError, bool fCheckCollateral) const
 {
     bool fMissingConfirmations = false;
 
-    return IsValidLocally(strError, fMissingConfirmations, fCheckCollateral);
+    return IsValidLocally(chainman, strError, fMissingConfirmations, fCheckCollateral);
 }
 
-bool CGovernanceObject::IsValidLocally(std::string& strError, bool& fMissingConfirmations, bool fCheckCollateral) const
+bool CGovernanceObject::IsValidLocally(ChainstateManager &chainman, std::string& strError, bool& fMissingConfirmations, bool fCheckCollateral) const
 {
     fMissingConfirmations = false;
 
@@ -473,7 +469,7 @@ bool CGovernanceObject::IsValidLocally(std::string& strError, bool& fMissingConf
             strError = strprintf("Invalid proposal data, error messages: %s", validator.GetErrorMessages());
             return false;
         }
-        if (fCheckCollateral && !IsCollateralValid(strError, fMissingConfirmations)) {
+        if (fCheckCollateral && !IsCollateralValid(chainman, strError, fMissingConfirmations)) {
             strError = "Invalid proposal collateral";
             return false;
         }
@@ -485,9 +481,7 @@ bool CGovernanceObject::IsValidLocally(std::string& strError, bool& fMissingConf
             // nothing else we can check here (yet?)
             return true;
         }
-        CDeterministicMNList mnList;
-        if(deterministicMNManager)
-            deterministicMNManager->GetListAtChainTip(mnList);
+        auto mnList = deterministicMNManager->GetListAtChainTip();
 
         std::string strOutpoint = masternodeOutpoint.ToStringShort();
         auto dmn = mnList.GetMNByCollateral(masternodeOutpoint);
@@ -524,7 +518,7 @@ CAmount CGovernanceObject::GetMinCollateralFee() const
     }
 }
 
-bool CGovernanceObject::IsCollateralValid(std::string& strError, bool& fMissingConfirmations) const
+bool CGovernanceObject::IsCollateralValid(ChainstateManager &chainman, std::string& strError, bool& fMissingConfirmations) const
 {
     LOCK(cs_main);
     strError = "";
@@ -542,13 +536,13 @@ bool CGovernanceObject::IsCollateralValid(std::string& strError, bool& fMissingC
         LogPrint(BCLog::GOBJECT, "CGovernanceObject::IsCollateralValid -- %s\n", strError);	
         return false;   	
     }
-    txCollateral = GetTransaction(::ChainActive()[nBlockHeight], nullptr, nCollateralHash, Params().GetConsensus(), nBlockHash);
+    txCollateral = GetTransaction(chainman.ActiveChain()[nBlockHeight], nullptr, nCollateralHash, Params().GetConsensus(), nBlockHash);
     if(!txCollateral) {
         strError = strprintf("Can't find collateral tx %s", nCollateralHash.ToString());
         LogPrint(BCLog::GOBJECT,"CGovernanceObject::IsCollateralValid -- %s\n", strError);
         return false;
     }
-    int nConfirmationsIn = ::ChainActive().Height() - nBlockHeight + 1;
+    int nConfirmationsIn = chainman.ActiveHeight() - nBlockHeight + 1;
 
     if (nBlockHash == uint256()) {
         strError = strprintf("Collateral tx %s is not mined yet", txCollateral->ToString());
@@ -668,9 +662,7 @@ void CGovernanceObject::Relay(CConnman& connman)
 void CGovernanceObject::UpdateSentinelVariables()
 {
     // CALCULATE MINIMUM SUPPORT LEVELS REQUIRED
-    CDeterministicMNList mnList;
-    if(deterministicMNManager)
-        deterministicMNManager->GetListAtChainTip(mnList);
+    auto mnList = deterministicMNManager->GetListAtChainTip();
     int nMnCount = (int)mnList.GetValidMNsCount();
     if (nMnCount == 0) return;
 

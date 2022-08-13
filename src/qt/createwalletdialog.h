@@ -7,11 +7,13 @@
 
 #include <QDialog>
 
-class WalletModel;
+#include <memory>
 
-#ifdef ENABLE_EXTERNAL_SIGNER
+namespace interfaces {
 class ExternalSigner;
-#endif
+} // namespace interfaces
+
+class WalletModel;
 
 namespace Ui {
     class CreateWalletDialog;
@@ -27,9 +29,7 @@ public:
     explicit CreateWalletDialog(QWidget* parent);
     virtual ~CreateWalletDialog();
 
-#ifdef ENABLE_EXTERNAL_SIGNER
-    void setSigners(std::vector<ExternalSigner>& signers);
-#endif
+    void setSigners(const std::vector<std::unique_ptr<interfaces::ExternalSigner>>& signers);
 
     QString walletName() const;
     bool isEncryptWalletChecked() const;
@@ -40,6 +40,7 @@ public:
 
 private:
     Ui::CreateWalletDialog *ui;
+    bool m_has_signers = false;
 };
 
 #endif // SYSCOIN_QT_CREATEWALLETDIALOG_H

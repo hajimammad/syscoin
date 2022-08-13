@@ -114,12 +114,12 @@ AddressBookPage::AddressBookPage(const PlatformStyle *platformStyle, Mode _mode,
 
     // Build context menu
     contextMenu = new QMenu(this);
-    contextMenu->addAction(tr("Copy Address"), this, &AddressBookPage::on_copyAddress_clicked);
-    contextMenu->addAction(tr("Copy Label"), this, &AddressBookPage::onCopyLabelAction);
-    contextMenu->addAction(tr("Edit"), this, &AddressBookPage::onEditAction);
+    contextMenu->addAction(tr("&Copy Address"), this, &AddressBookPage::on_copyAddress_clicked);
+    contextMenu->addAction(tr("Copy &Label"), this, &AddressBookPage::onCopyLabelAction);
+    contextMenu->addAction(tr("&Edit"), this, &AddressBookPage::onEditAction);
 
     if (tab == SendingTab) {
-        contextMenu->addAction(tr("Delete"), this, &AddressBookPage::on_deleteAddress_clicked);
+        contextMenu->addAction(tr("&Delete"), this, &AddressBookPage::on_deleteAddress_clicked);
     }
 
     connect(ui->tableView, &QWidget::customContextMenuRequested, this, &AddressBookPage::contextualMenu);
@@ -182,14 +182,14 @@ void AddressBookPage::onEditAction()
     if(indexes.isEmpty())
         return;
 
-    EditAddressDialog dlg(
+    auto dlg = new EditAddressDialog(
         tab == SendingTab ?
         EditAddressDialog::EditSendingAddress :
         EditAddressDialog::EditReceivingAddress, this);
-    dlg.setModel(model);
+    dlg->setModel(model);
     QModelIndex origIndex = proxyModel->mapToSource(indexes.at(0));
-    dlg.loadRow(origIndex.row());
-    dlg.exec();
+    dlg->loadRow(origIndex.row());
+    GUIUtil::ShowModalDialogAndDeleteOnClose(dlg);
 }
 
 void AddressBookPage::on_newAddress_clicked()
@@ -282,7 +282,7 @@ void AddressBookPage::on_exportButton_clicked()
     QString filename = GUIUtil::getSaveFileName(this,
         tr("Export Address List"), QString(),
         /*: Expanded name of the CSV file format.
-            See https://en.wikipedia.org/wiki/Comma-separated_values */
+            See: https://en.wikipedia.org/wiki/Comma-separated_values. */
         tr("Comma separated file") + QLatin1String(" (*.csv)"), nullptr);
 
     if (filename.isNull())

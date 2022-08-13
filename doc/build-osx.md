@@ -187,7 +187,7 @@ Check out the [further configuration](#further-configuration) section for more i
 #### ZMQ Dependencies
 
 Support for ZMQ notifications requires the following dependency.
-Skip if you do not need ZMQ functionality.
+You must install ZMQ if you wish to enable the NEVM layer.
 
 ``` bash
 brew install zeromq

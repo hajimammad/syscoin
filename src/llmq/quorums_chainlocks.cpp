@@ -34,9 +34,10 @@ std::string CChainLockSig::ToString() const
                 std::count(signers.begin(), signers.end(), true));
 }
 
-CChainLocksHandler::CChainLocksHandler(CConnman& _connman, PeerManager& _peerman):     
+CChainLocksHandler::CChainLocksHandler(CConnman& _connman, PeerManager& _peerman, ChainstateManager& _chainman):     
     connman(_connman),
-    peerman(_peerman)
+    peerman(_peerman),
+    chainman(_chainman)
 {
     scheduler = new CScheduler();
     CScheduler::Function serviceLoop = std::bind(&CScheduler::serviceQueue, scheduler);
@@ -67,7 +68,7 @@ void CChainLocksHandler::Start()
         }
         if(enforced) {
             AssertLockNotHeld(cs);
-            ::ChainstateActive().EnforceBestChainLock(pindex);
+            chainman.ActiveChainstate().EnforceBestChainLock(pindex);
         }
         TrySignChainTip();
     }, std::chrono::seconds{5});
@@ -82,13 +83,13 @@ void CChainLocksHandler::Stop()
     quorumSigningManager->UnregisterRecoveredSigsListener(this);
 }
 
-bool CChainLocksHandler::AlreadyHave(const uint256& hash)
+bool CChainLocksHandler::AlreadyHave(const uint256& hash) const
 {
     LOCK(cs);
     return seenChainLocks.count(hash) != 0;
 }
 
-bool CChainLocksHandler::GetChainLockByHash(const uint256& hash, llmq::CChainLockSig& ret)
+bool CChainLocksHandler::GetChainLockByHash(const uint256& hash, llmq::CChainLockSig& ret) const
 {
     LOCK(cs);
 
@@ -122,17 +123,17 @@ bool CChainLocksHandler::GetChainLockByHash(const uint256& hash, llmq::CChainLoc
 }
 
 
-const CChainLockSig CChainLocksHandler::GetMostRecentChainLock()
+const CChainLockSig CChainLocksHandler::GetMostRecentChainLock() const
 {
     LOCK(cs);
     return mostRecentChainLockShare;
 }
-const CChainLockSig CChainLocksHandler::GetBestChainLock()
+const CChainLockSig CChainLocksHandler::GetBestChainLock() const
 {
     LOCK(cs);
     return bestChainLockWithKnownBlock;
 }
-const std::map<CQuorumCPtr, CChainLockSigCPtr> CChainLocksHandler::GetBestChainLockShares()
+const std::map<CQuorumCPtr, CChainLockSigCPtr> CChainLocksHandler::GetBestChainLockShares() const
 {
 
     LOCK(cs);
@@ -212,8 +213,7 @@ bool CChainLocksHandler::VerifyChainLockShare(const CChainLockSig& clsig, const 
         return false;
     }
     bool fHaveSigner{std::count(clsig.signers.begin(), clsig.signers.end(), true) > 0};
-    std::vector<CQuorumCPtr> quorums_scanned;
-    llmq::quorumManager->ScanQuorums(llmqType, pindexScan, signingActiveQuorumCount, quorums_scanned);
+    const auto quorums_scanned = llmq::quorumManager->ScanQuorums(llmqType, pindexScan, signingActiveQuorumCount);
 
     for (size_t i = 0; i < quorums_scanned.size(); ++i) {
         const CQuorumCPtr& quorum = quorums_scanned[i];
@@ -273,8 +273,7 @@ bool CChainLocksHandler::VerifyAggregatedChainLock(const CChainLockSig& clsig, c
         // not enough signers
         return false;
     }
-    std::vector<CQuorumCPtr> quorums_scanned;
-    llmq::quorumManager->ScanQuorums(llmqType, pindexScan, signingActiveQuorumCount, quorums_scanned);
+    const auto quorums_scanned = llmq::quorumManager->ScanQuorums(llmqType, pindexScan, signingActiveQuorumCount);
 
     for (size_t i = 0; i < quorums_scanned.size(); ++i) {
         const CQuorumCPtr& quorum = quorums_scanned[i];
@@ -304,9 +303,7 @@ void CChainLocksHandler::ProcessMessage(CNode* pfrom, const std::string& strComm
         CChainLockSig clsig;
         vRecv >> clsig;
 
-        auto hash = ::SerializeHash(clsig);
-
-        ProcessNewChainLock(pfrom->GetId(), clsig, hash);
+        ProcessNewChainLock(pfrom->GetId(), clsig, ::SerializeHash(clsig));
     }
 }
 
@@ -323,7 +320,7 @@ void CChainLocksHandler::ProcessNewChainLock(const NodeId from, llmq::CChainLock
     bool bReturn = false;
     {
         LOCK(cs);
-        if (!seenChainLocks.try_emplace(hash, GetTimeMillis()).second) {
+        if (!seenChainLocks.emplace(hash, GetTimeMillis()).second) {
             bReturn = true;
         }
 
@@ -344,20 +341,20 @@ void CChainLocksHandler::ProcessNewChainLock(const NodeId from, llmq::CChainLock
     CBlockIndex* pindexScan{nullptr};
     {
         LOCK(cs_main);
-        if (clsig.nHeight > ::ChainActive().Height() + CSigningManager::SIGN_HEIGHT_OFFSET) {
+        if (clsig.nHeight > chainman.ActiveHeight() + CSigningManager::SIGN_HEIGHT_OFFSET) {
             // too far into the future
             LogPrint(BCLog::CHAINLOCKS, "CChainLocksHandler::%s -- future CLSIG (%s), peer=%d\n", __func__, clsig.ToString(), from);
             return;
         }
-        pindexSig = pindexScan = g_chainman.m_blockman.LookupBlockIndex(clsig.blockHash);
+        pindexSig = pindexScan = chainman.m_blockman.LookupBlockIndex(clsig.blockHash);
          if (pindexScan == nullptr) {
             // we don't know the block/header for this CLSIG yet
-            if (clsig.nHeight <= ::ChainActive().Height()) {
+            if (clsig.nHeight <= chainman.ActiveHeight()) {
                 // could be a parallel fork at the same height, try scanning quorums at the same height
-                pindexScan = ::ChainActive().Tip()->GetAncestor(clsig.nHeight);
+                pindexScan = chainman.ActiveTip()->GetAncestor(clsig.nHeight);
             } else {
                 // no idea what kind of block it is, try scanning quorums at chain tip
-                pindexScan = ::ChainActive().Tip();
+                pindexScan = chainman.ActiveTip();
             }
         }
         if (pindexSig != nullptr && pindexSig->nHeight != clsig.nHeight) {
@@ -402,9 +399,9 @@ void CChainLocksHandler::ProcessNewChainLock(const NodeId from, llmq::CChainLock
             }
             auto it = bestChainLockShares.find(clsig.nHeight);
             if (it == bestChainLockShares.end()) {
-                bestChainLockShares[clsig.nHeight].try_emplace(ret.second, std::make_shared<const CChainLockSig>(clsig));
+                bestChainLockShares[clsig.nHeight].emplace(ret.second, std::make_shared<const CChainLockSig>(clsig));
             } else {
-                it->second.try_emplace(ret.second, std::make_shared<const CChainLockSig>(clsig));
+                it->second.emplace(ret.second, std::make_shared<const CChainLockSig>(clsig));
             }
             mostRecentChainLockShare = clsig;
             if (TryUpdateBestChainLock(pindexSig)) {
@@ -458,11 +455,7 @@ void CChainLocksHandler::ProcessNewChainLock(const NodeId from, llmq::CChainLock
         // when the block or the header later comes in, we will enforce the correct chain
         return;
     }
-    bool bChainLockMatchSigIndex;
-    {
-        LOCK(cs);
-        bChainLockMatchSigIndex = bestChainLockBlockIndex == pindexSig;
-    }
+    bool bChainLockMatchSigIndex = WITH_LOCK(cs, return bestChainLockBlockIndex == pindexSig);
     if (bChainLockMatchSigIndex) {
         CheckActiveState();
         const CBlockIndex* pindex;
@@ -473,7 +466,7 @@ void CChainLocksHandler::ProcessNewChainLock(const NodeId from, llmq::CChainLock
         }
         if(enforced) {
             AssertLockNotHeld(cs);
-            ::ChainstateActive().EnforceBestChainLock(pindex);
+            chainman.ActiveChainstate().EnforceBestChainLock(pindex);
         }
         LogPrint(BCLog::CHAINLOCKS, "CChainLocksHandler::%s -- processed new CLSIG (%s), peer=%d\n",
               __func__, clsig.ToString(), from);
@@ -517,7 +510,7 @@ void CChainLocksHandler::UpdatedBlockTip(const CBlockIndex* pindexNew, bool fIni
     
     if(enforced) {
         AssertLockNotHeld(cs);
-        ::ChainstateActive().EnforceBestChainLock(pindex);
+        chainman.ActiveChainstate().EnforceBestChainLock(pindex);
     }
     TrySignChainTip();
     {       
@@ -592,11 +585,7 @@ void CChainLocksHandler::TrySignChainTip()
         return;
     }
 
-    const CBlockIndex* pindex;
-    {
-        LOCK(cs_main);
-        pindex = ::ChainActive().Tip();
-    }
+    const CBlockIndex* pindex = WITH_LOCK(cs_main, return chainman.ActiveTip());
 
     if (!pindex || !pindex->pprev) {
         return;
@@ -643,9 +632,7 @@ void CChainLocksHandler::TrySignChainTip()
     const auto& llmqParams = consensus.llmqs.at(consensus.llmqTypeChainLocks);
     const auto& signingActiveQuorumCount = llmqParams.signingActiveQuorumCount;
     
-
-    std::vector<CQuorumCPtr> quorums_scanned;
-    llmq::quorumManager->ScanQuorums(llmqType, pindex, signingActiveQuorumCount, quorums_scanned);
+    const auto quorums_scanned = llmq::quorumManager->ScanQuorums(llmqType, pindex, signingActiveQuorumCount);
     std::map<CQuorumCPtr, CChainLockSigCPtr> mapSharesAtTip;
     {
         LOCK(cs);
@@ -692,7 +679,7 @@ void CChainLocksHandler::TrySignChainTip()
                 // just sign whatever we think is a good tip
             } else if (it2->second->blockHash != pindex->GetBlockHash()) {
                 LOCK(cs_main);
-                auto shareBlockIndex = g_chainman.m_blockman.LookupBlockIndex(it2->second->blockHash);
+                auto shareBlockIndex = chainman.m_blockman.LookupBlockIndex(it2->second->blockHash);
                 if (shareBlockIndex != nullptr && shareBlockIndex->nHeight == pindex->nHeight) {
                     // previous quorum signed an alternative chain tip, sign it too instead
                     LogPrint(BCLog::CHAINLOCKS, "CChainLocksHandler::%s -- previous quorum (%d, %s) signed an alternative chaintip (%s != %s) at height %d, join it\n",
@@ -718,7 +705,7 @@ void CChainLocksHandler::TrySignChainTip()
                 // might have happened while we didn't hold cs
                 return;
             }
-            mapSignedRequestIds.try_emplace(requestId, std::make_pair(pindex->nHeight, pindex->GetBlockHash()));
+            mapSignedRequestIds.emplace(requestId, std::make_pair(pindex->nHeight, pindex->GetBlockHash()));
         }
         quorumSigningManager->AsyncSignIfMember(llmqType, requestId, pindex->GetBlockHash(), quorum->qc->quorumHash);
     }
@@ -757,13 +744,13 @@ void CChainLocksHandler::HandleNewRecoveredSig(const llmq::CRecoveredSig& recove
     ProcessNewChainLock(-1, clsig, ::SerializeHash(clsig), recoveredSig.id);
 }
 
-bool CChainLocksHandler::HasChainLock(int nHeight, const uint256& blockHash)
+bool CChainLocksHandler::HasChainLock(int nHeight, const uint256& blockHash) const
 {
     LOCK(cs);
     return InternalHasChainLock(nHeight, blockHash);
 }
 
-bool CChainLocksHandler::InternalHasChainLock(int nHeight, const uint256& blockHash)
+bool CChainLocksHandler::InternalHasChainLock(int nHeight, const uint256& blockHash) const
 {
     AssertLockHeld(cs);
 
@@ -787,13 +774,13 @@ bool CChainLocksHandler::InternalHasChainLock(int nHeight, const uint256& blockH
     return pAncestor && pAncestor->GetBlockHash() == blockHash;
 }
 
-bool CChainLocksHandler::HasConflictingChainLock(int nHeight, const uint256& blockHash)
+bool CChainLocksHandler::HasConflictingChainLock(int nHeight, const uint256& blockHash) const
 {
     LOCK(cs);
     return InternalHasConflictingChainLock(nHeight, blockHash);
 }
 
-bool CChainLocksHandler::InternalHasConflictingChainLock(int nHeight, const uint256& blockHash)
+bool CChainLocksHandler::InternalHasConflictingChainLock(int nHeight, const uint256& blockHash) const
 {
     AssertLockHeld(cs);
 

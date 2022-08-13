@@ -7,7 +7,7 @@
 
 #include <bls/bls.h>
 
-#include <ctpl.h>
+#include <ctpl_stl.h>
 
 #include <future>
 #include <mutex>
@@ -20,9 +20,9 @@
 class CBLSWorker
 {
 public:
-    typedef std::function<void(const CBLSSignature&)> SignDoneCallback;
-    typedef std::function<void(bool)> SigVerifyDoneCallback;
-    typedef std::function<bool()> CancelCond;
+    using SignDoneCallback = std::function<void(const CBLSSignature&)>;
+    using SigVerifyDoneCallback = std::function<void(bool)>;
+    using CancelCond = std::function<bool()>;
 
 private:
     ctpl::thread_pool workerPool;
@@ -43,7 +43,7 @@ private:
         }
     };
 
-    RecursiveMutex sigVerifyMutex;
+    std::mutex sigVerifyMutex;
     int sigVerifyBatchesInProgress{0};
     std::vector<SigVerifyJob> sigVerifyQueue;
 
@@ -93,15 +93,11 @@ public:
                                   std::function<void(const CBLSPublicKey&)> doneCallback);
     std::future<CBLSPublicKey> AsyncAggregatePublicKeys(const BLSPublicKeyVector& pubKeys,
                                                         size_t start, size_t count, bool parallel);
-    __attribute__((unused)) CBLSPublicKey AggregatePublicKeys(const BLSPublicKeyVector& pubKeys, size_t start = 0, size_t count = 0, bool parallel = true);
-
     void AsyncAggregateSigs(const BLSSignatureVector& sigs,
                             size_t start, size_t count, bool parallel,
                             std::function<void(const CBLSSignature&)> doneCallback);
     std::future<CBLSSignature> AsyncAggregateSigs(const BLSSignatureVector& sigs,
                                                         size_t start, size_t count, bool parallel);
-    CBLSSignature AggregateSigs(const BLSSignatureVector& sigs, size_t start = 0, size_t count = 0, bool parallel = true);
-
 
     // Calculate public key share from public key vector and id. Not parallelized
     static CBLSPublicKey BuildPubKeyShare(const BLSVerificationVectorPtr& vvec, const CBLSId& id);
@@ -121,18 +117,12 @@ public:
 
     std::future<bool> AsyncVerifyContributionShare(const CBLSId& forId, const BLSVerificationVectorPtr& vvec, const CBLSSecretKey& skContribution);
 
-    // Non paralellized verification of a single contribution
-    static bool VerifyContributionShare(const CBLSId& forId, const BLSVerificationVectorPtr& vvec, const CBLSSecretKey& skContribution);
-
     // Simple verification of vectors. Checks x.IsValid() for every entry and checks for duplicate entries
     static bool VerifyVerificationVector(const BLSVerificationVector& vvec, size_t start = 0, size_t count = 0);
     static bool VerifyVerificationVectors(const std::vector<BLSVerificationVectorPtr>& vvecs, size_t start = 0, size_t count = 0);
-    static bool VerifySecretKeyVector(const BLSSecretKeyVector& secKeys, size_t start = 0, size_t count = 0);
-    static bool VerifySignatureVector(const BLSSignatureVector& sigs, size_t start = 0, size_t count = 0);
-
+ 
     // Internally batched signature signing and verification
     void AsyncSign(const CBLSSecretKey& secKey, const uint256& msgHash, const SignDoneCallback &doneCallback);
-    std::future<CBLSSignature> AsyncSign(const CBLSSecretKey& secKey, const uint256& msgHash);
     void AsyncVerifySig(const CBLSSignature& sig, const CBLSPublicKey& pubKey, const uint256& msgHash, SigVerifyDoneCallback doneCallback, CancelCond cancelCond = [] { return false; });
     std::future<bool> AsyncVerifySig(const CBLSSignature& sig, const CBLSPublicKey& pubKey, const uint256& msgHash, CancelCond cancelCond = [] { return false; });
     bool IsAsyncVerifyInProgress();
@@ -150,7 +140,7 @@ class CBLSWorkerCache
 private:
     CBLSWorker& worker;
 
-    RecursiveMutex cacheCs;
+    std::mutex cacheCs;
     std::map<uint256, std::shared_future<BLSVerificationVectorPtr> > vvecCache;
     std::map<uint256, std::shared_future<CBLSSecretKey> > secretKeyShareCache;
     std::map<uint256, std::shared_future<CBLSPublicKey> > publicKeyShareCache;
@@ -161,19 +151,19 @@ public:
 
     BLSVerificationVectorPtr BuildQuorumVerificationVector(const uint256& cacheKey, const std::vector<BLSVerificationVectorPtr>& vvecs)
     {
-        return GetOrBuild(cacheKey, vvecCache, [&]() {
+        return GetOrBuild(cacheKey, vvecCache, [this, &vvecs]() {
             return worker.BuildQuorumVerificationVector(vvecs);
         });
     }
     CBLSSecretKey AggregateSecretKeys(const uint256& cacheKey, const BLSSecretKeyVector& skShares)
     {
-        return GetOrBuild(cacheKey, secretKeyShareCache, [&]() {
+        return GetOrBuild(cacheKey, secretKeyShareCache, [this, &skShares]() {
             return worker.AggregateSecretKeys(skShares);
         });
     }
     CBLSPublicKey BuildPubKeyShare(const uint256& cacheKey, const BLSVerificationVectorPtr& vvec, const CBLSId& id)
     {
-        return GetOrBuild(cacheKey, publicKeyShareCache, [&]() {
+        return GetOrBuild(cacheKey, publicKeyShareCache, [&vvec, &id]() {
             return CBLSWorker::BuildPubKeyShare(vvec, id);
         });
     }
@@ -191,7 +181,7 @@ private:
         }
 
         std::promise<T> p;
-        cache.try_emplace(cacheKey, p.get_future());
+        cache.emplace(cacheKey, p.get_future());
         cacheCs.unlock();
 
         T v = builder();
@@ -200,4 +190,4 @@ private:
     }
 };
 
-#endif //SYSCOIN_BLS_BLS_WORKER_H
+#endif // SYSCOIN_BLS_BLS_WORKER_H

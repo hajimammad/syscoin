@@ -152,6 +152,8 @@ enum
     SER_NETWORK         = (1 << 0),
     SER_DISK            = (1 << 1),
     SER_GETHASH         = (1 << 2),
+    // SYSCOIN
+    SER_SIZE            = (1 << 3),
 };
 
 //! Convert the reference base type to X, without changing constness or reference type.
@@ -866,7 +868,11 @@ template<typename Stream, typename K, typename A> void Unserialize(Stream& is, s
  */
 template<typename Stream, typename K, typename T, typename Pred, typename A> void Serialize(Stream& os, const std::unordered_map<K, T, Pred, A>& m);
 template<typename Stream, typename K, typename T, typename Pred, typename A> void Unserialize(Stream& is, std::unordered_map<K, T, Pred, A>& m);
-
+/**
+ * atomic
+ */
+template<typename Stream, typename T> void Serialize(Stream& os, const std::atomic<T>& a);
+template<typename Stream, typename T> void Unserialize(Stream& is, std::atomic<T>& a);
 
 /**
  * If none of the specialized versions above matched, default to calling member function.
@@ -1269,6 +1275,25 @@ void Unserialize(Stream& is, std::shared_ptr<const T>& p)
 
 
 /**
+ * atomic
+ */
+template<typename Stream, typename T>
+void Serialize(Stream& os, const std::atomic<T>& a)
+{
+    Serialize(os, a.load());
+}
+
+template<typename Stream, typename T>
+void Unserialize(Stream& is, std::atomic<T>& a)
+{
+    T val;
+    Unserialize(is, val);
+    a.store(val);
+}
+
+
+
+/**
  * Support for SERIALIZE_METHODS and READWRITE macro.
  */
 struct CSerActionSerialize
@@ -1302,10 +1327,11 @@ class CSizeComputer
 {
 protected:
     size_t nSize;
-
+    // SYSCOIN
+    const int nProtocol;
     const int nVersion;
 public:
-    explicit CSizeComputer(int nVersionIn) : nSize(0), nVersion(nVersionIn) {}
+    explicit CSizeComputer(int nVersionIn, int nProtocolIn = SER_SIZE) : nSize(0), nProtocol(nProtocolIn), nVersion(nVersionIn) {}
 
     void write(const char *psz, size_t _nSize)
     {
@@ -1330,6 +1356,8 @@ public:
     }
 
     int GetVersion() const { return nVersion; }
+    // SYSCOIN
+    int GetType() const { return nProtocol; }
 };
 
 template<typename Stream>
@@ -1402,9 +1430,9 @@ inline void WriteCompactSize(CSizeComputer &s, uint64_t nSize)
 }
 
 template <typename T>
-size_t GetSerializeSize(const T& t, int nVersion = 0)
+size_t GetSerializeSize(const T& t, int nVersion = 0, int nProtocol = SER_SIZE)
 {
-    return (CSizeComputer(nVersion) << t).size();
+    return (CSizeComputer(nVersion, nProtocol) << t).size();
 }
 // SYSCOIN
 template <typename S, typename T>

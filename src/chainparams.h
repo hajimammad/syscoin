@@ -8,11 +8,13 @@
 
 #include <chainparamsbase.h>
 #include <consensus/params.h>
+#include <netaddress.h>
 #include <primitives/block.h>
 #include <protocol.h>
 #include <util/hash_type.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 typedef std::map<int, uint256> MapCheckpoints;
@@ -80,6 +82,15 @@ public:
     const Consensus::Params& GetConsensus() const { return consensus; }
     const CMessageHeader::MessageStartChars& MessageStart() const { return pchMessageStart; }
     uint16_t GetDefaultPort() const { return nDefaultPort; }
+    uint16_t GetDefaultPort(Network net) const
+    {
+        return net == NET_I2P ? I2P_SAM31_PORT : GetDefaultPort();
+    }
+    uint16_t GetDefaultPort(const std::string& addr) const
+    {
+        CNetAddr a;
+        return a.SetSpecial(addr) ? GetDefaultPort(a.GetNetwork()) : GetDefaultPort();
+    }
 
     const CBlock& GenesisBlock() const { return genesis; }
     /** Default value for -checkmempool and -checkblockindex argument */
@@ -120,8 +131,6 @@ public:
     bool RequireRoutableExternalIP() const { return fRequireRoutableExternalIP; }
     /** How long to wait until we allow retrying of a LLMQ connection  */
     int LLMQConnectionRetryTimeout() const { return nLLMQConnectionRetryTimeout; }
-    /** Allow nodes with the same address and multiple ports */
-    bool AllowMultiplePorts() const { return fAllowMultiplePorts; }
     void UpdateDIP3Parameters(int nActivationHeight, int nEnforcementHeight);
     virtual ~CChainParams() {}
 protected:
@@ -149,7 +158,6 @@ protected:
     // SYSCOIN
     int nLLMQConnectionRetryTimeout;
     bool fRequireRoutableExternalIP;
-    bool fAllowMultiplePorts;
     int nFulfilledRequestExpireTime;
     std::vector<std::string> vSporkAddresses;
     int nMinSporkKeys;

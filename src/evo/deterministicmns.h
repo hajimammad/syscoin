@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <script/standard.h>
+#include <interfaces/chain.h>
 class CBlock;
 class CBlockIndex;
 class BlockValidationState;
@@ -118,8 +119,8 @@ public:
     std::string ToString() const;
     void ToJson(UniValue& obj) const;
 };
-typedef std::shared_ptr<CDeterministicMNState> CDeterministicMNStatePtr;
-typedef std::shared_ptr<const CDeterministicMNState> CDeterministicMNStateCPtr;
+using CDeterministicMNStatePtr = std::shared_ptr<CDeterministicMNState>;
+using CDeterministicMNStateCPtr = std::shared_ptr<const CDeterministicMNState>;
 
 class CDeterministicMNStateDiff
 {
@@ -219,17 +220,17 @@ public:
     uint64_t GetInternalId() const;
 
     std::string ToString() const;
-    void ToJson(UniValue& obj) const;
+    void ToJson(interfaces::Chain& chain, UniValue& obj) const;
 };
-typedef std::shared_ptr<const CDeterministicMN> CDeterministicMNCPtr;
+using CDeterministicMNCPtr = std::shared_ptr<const CDeterministicMN>;
 
 class CDeterministicMNListDiff;
 class CDeterministicMNList
 {
 public:
-    typedef immer::map<uint256, CDeterministicMNCPtr> MnMap;
-    typedef immer::map<uint64_t, uint256> MnInternalIdMap;
-    typedef immer::map<uint256, std::pair<uint256, uint32_t> > MnUniquePropertyMap;
+    using MnMap = immer::map<uint256, CDeterministicMNCPtr>;
+    using MnInternalIdMap = immer::map<uint64_t, uint256>;
+    using MnUniquePropertyMap = immer::map<uint256, std::pair<uint256, uint32_t> >;
 
 private:
     uint256 blockHash;
@@ -354,7 +355,7 @@ public:
     }
     CDeterministicMNCPtr GetMN(const uint256& proTxHash) const;
     CDeterministicMNCPtr GetValidMN(const uint256& proTxHash) const;
-    CDeterministicMNCPtr GetMNByOperatorKey(const CBLSPublicKey& pubKey);
+    CDeterministicMNCPtr GetMNByOperatorKey(const CBLSPublicKey& pubKey) const;
     CDeterministicMNCPtr GetMNByCollateral(const COutPoint& collateralOutpoint) const;
     CDeterministicMNCPtr GetValidMNByCollateral(const COutPoint& collateralOutpoint) const;
     CDeterministicMNCPtr GetMNByService(const CService& service) const;
@@ -367,7 +368,7 @@ public:
      * @param[in]   nCount max block count to find mn payees
      * @param[out]  result result vector of payees
      */
-    void GetProjectedMNPayees(size_t nCount, std::vector<CDeterministicMNCPtr>& result) const;
+    std::vector<CDeterministicMNCPtr> GetProjectedMNPayees(int nCount) const;
 
     /**
      * Calculate a quorum based on the modifier. The resulting list is deterministically sorted by score
@@ -375,8 +376,8 @@ public:
      * @param[in]   modifier hash used as seed for quorum calculation
      * @param[out]  members return vector of MN's as candidates
      */
-    void CalculateQuorum(size_t maxSize, const uint256& modifier, std::vector<CDeterministicMNCPtr> &members) const;
-    void CalculateScores(const uint256& modifier, std::vector<std::pair<arith_uint256, CDeterministicMNCPtr>> &scores) const;
+    std::vector<CDeterministicMNCPtr> CalculateQuorum(size_t maxSize, const uint256& modifier) const;
+    std::vector<std::pair<arith_uint256, CDeterministicMNCPtr>> CalculateScores(const uint256& modifier) const;
 
     /**
      * Calculates the maximum penalty which is allowed at the height of this MN list. It is dynamic and might change
@@ -410,7 +411,7 @@ public:
      */
     void PoSeDecrease(const uint256& proTxHash);
 
-    void BuildDiff(const CDeterministicMNList& to, CDeterministicMNListDiff& ret) const;
+    CDeterministicMNListDiff BuildDiff(const CDeterministicMNList& to) const;
     CSimplifiedMNListDiff BuildSimplifiedDiff(const CDeterministicMNList& to) const;
     CDeterministicMNList ApplyDiff(const CBlockIndex* pindex, const CDeterministicMNListDiff& diff) const;
 
@@ -536,7 +537,7 @@ public:
             CDeterministicMNStateDiff diff;
             tmp2 = ReadVarInt<Stream, VarIntMode::DEFAULT, uint64_t>(s);
             s >> diff;
-            updatedMNs.try_emplace(tmp2, std::move(diff));
+            updatedMNs.emplace(tmp2, std::move(diff));
         }
         tmp = ReadCompactSize(s);
         for (size_t i = 0; i < tmp; i++) {
@@ -554,21 +555,21 @@ public:
 
 class CDeterministicMNManager
 {
-    static const int DISK_SNAPSHOT_PERIOD = 576; // once per day
-    static const int DISK_SNAPSHOTS = 3; // keep cache for 3 disk snapshots to have 2 full days covered
-    static const int LIST_DIFFS_CACHE_SIZE = DISK_SNAPSHOT_PERIOD * DISK_SNAPSHOTS;
+    static constexpr int DISK_SNAPSHOT_PERIOD = 576; // once per day
+    static constexpr int DISK_SNAPSHOTS = 3; // keep cache for 3 disk snapshots to have 2 full days covered
+    static constexpr int LIST_DIFFS_CACHE_SIZE = DISK_SNAPSHOT_PERIOD * DISK_SNAPSHOTS;
 
 public:
     mutable RecursiveMutex cs;
 
 private:
-
+    CEvoDB& evoDb;
     std::unordered_map<uint256, CDeterministicMNList, StaticSaltedHasher> mnListsCache;
     std::unordered_map<uint256, CDeterministicMNListDiff, StaticSaltedHasher> mnListDiffsCache;
     const CBlockIndex* tipIndex{};
 
 public:
-    explicit CDeterministicMNManager();
+    explicit CDeterministicMNManager(CEvoDB& _evoDb);
 
     bool ProcessBlock(const CBlock& block, const CBlockIndex* pindex, BlockValidationState& state, CCoinsViewCache& view, bool fJustCheck) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     bool UndoBlock(const CBlock& block, const CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
@@ -577,11 +578,11 @@ public:
 
     // the returned list will not contain the correct block hash (we can't know it yet as the coinbase TX is not updated yet)
     bool BuildNewListFromBlock(const CBlock& block, const CBlockIndex* pindexPrev, BlockValidationState& state, CCoinsViewCache& view, CDeterministicMNList& mnListRet, bool debugLogs, const llmq::CFinalCommitmentTxPayload *qcIn = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main, cs);
-    static void HandleQuorumCommitment(const llmq::CFinalCommitment& qc, const CBlockIndex* pindexQuorum, CDeterministicMNList& mnList, bool debugLogs);
+    static void HandleQuorumCommitment(const llmq::CFinalCommitment& qc, const CBlockIndex* pQuorumBaseBlockIndex, CDeterministicMNList& mnList, bool debugLogs);
     static void DecreasePoSePenalties(CDeterministicMNList& mnList);
 
-    void GetListForBlock(const CBlockIndex* pindex, CDeterministicMNList& result);
-    void GetListAtChainTip(CDeterministicMNList& result);
+    CDeterministicMNList GetListForBlock(const CBlockIndex* pindex);
+    CDeterministicMNList GetListAtChainTip();
 
     // Test if given TX is a ProRegTx which also contains the collateral at index n
     static bool IsProTxWithCollateral(const CTransactionRef& tx, uint32_t n);
@@ -594,4 +595,4 @@ private:
 
 extern std::unique_ptr<CDeterministicMNManager> deterministicMNManager;
 
-#endif //SYSCOIN_EVO_DETERMINISTICMNS_H
+#endif // SYSCOIN_EVO_DETERMINISTICMNS_H

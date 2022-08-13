@@ -6,12 +6,11 @@
 #ifndef SYSCOIN_NET_H
 #define SYSCOIN_NET_H
 
-#include <addrdb.h>
 #include <addrman.h>
-#include <amount.h>
-#include <bloom.h>
 #include <chainparams.h>
+#include <common/bloom.h>
 #include <compat.h>
+#include <consensus/amount.h>
 #include <crypto/siphash.h>
 #include <hash.h>
 #include <i2p.h>
@@ -78,7 +77,7 @@ static const bool DEFAULT_LISTEN = true;
 /** The maximum number of peer connections to maintain. */
 static const unsigned int DEFAULT_MAX_PEER_CONNECTIONS = 125;
 /** The default for -maxuploadtarget. 0 = Unlimited */
-static constexpr uint64_t DEFAULT_MAX_UPLOAD_TARGET = 0;
+static const std::string DEFAULT_MAX_UPLOAD_TARGET{"0M"};
 /** Default for blocks only*/
 static const bool DEFAULT_BLOCKSONLY = false;
 /** -peertimeout default */
@@ -88,9 +87,9 @@ static const int INBOUND_EVICTION_PROTECTION_TIME = 1;
 /** Number of file descriptors required for message capture **/
 static const int NUM_FDS_MESSAGE_CAPTURE = 1;
 
-static const bool DEFAULT_FORCEDNSSEED = false;
-static const bool DEFAULT_DNSSEED = true;
-static const bool DEFAULT_FIXEDSEEDS = true;
+static constexpr bool DEFAULT_FORCEDNSSEED{false};
+static constexpr bool DEFAULT_DNSSEED{true};
+static constexpr bool DEFAULT_FIXEDSEEDS{true};
 static const size_t DEFAULT_MAXRECEIVEBUFFER = 5 * 1000;
 static const size_t DEFAULT_MAXSENDBUFFER    = 1 * 1000;
 
@@ -236,7 +235,7 @@ bool AddLocal(const CService& addr, int nScore = LOCAL_NONE);
 bool AddLocal(const CNetAddr& addr, int nScore = LOCAL_NONE);
 void RemoveLocal(const CService& addr);
 bool SeenLocal(const CService& addr);
-bool IsLocal(const CService& addr);
+bool IsLocal(const CService& addr, bool bOverrideNetwork = false);
 bool GetLocal(CService &addr, const CNetAddr *paddrPeer = nullptr);
 CAddress GetLocalAddress(const CNetAddr *paddrPeer, ServiceFlags nLocalServices);
 
@@ -270,7 +269,7 @@ public:
     int64_t nLastBlockTime;
     int64_t nTimeConnected;
     int64_t nTimeOffset;
-    std::string addrName;
+    std::string m_addr_name;
     int nVersion;
     std::string cleanSubVer;
     bool fInbound;
@@ -336,7 +335,7 @@ public:
     /** read and deserialize data, advances msg_bytes data pointer */
     virtual int Read(Span<const uint8_t>& msg_bytes) = 0;
     // decomposes a message from the context
-    virtual std::optional<CNetMessage> GetMessage(std::chrono::microseconds time, uint32_t& out_err) = 0;
+    virtual CNetMessage GetMessage(std::chrono::microseconds time, bool& reject_message) = 0;
     virtual ~TransportDeserializer() {}
 };
 
@@ -400,7 +399,7 @@ public:
         }
         return ret;
     }
-    std::optional<CNetMessage> GetMessage(std::chrono::microseconds time, uint32_t& out_err_raw_size) override;
+    CNetMessage GetMessage(std::chrono::microseconds time, bool& reject_message) override;
 };
 
 /** The TransportSerializer prepares messages for the network transport
@@ -457,15 +456,16 @@ public:
     std::atomic<int64_t> nTimeFirstMessageReceived;
     std::atomic<bool> fFirstMessageIsMNAUTH;
     // If 'true' this node will be disconnected on CMasternodeMan::ProcessMasternodeConnections()
-    bool m_masternode_connection;
+    std::atomic<bool> m_masternode_connection;
     // If 'true' this node will be disconnected after MNAUTH
-    bool m_masternode_probe_connection;
+    std::atomic<bool> m_masternode_probe_connection;
     // If 'true', we identified it as an intra-quorum relay connection
-    bool m_masternode_iqr_connection;
+    std::atomic<bool> m_masternode_iqr_connection{false};
     // Address of this peer
     const CAddress addr;
     // Bind address of our side of the connection
     const CAddress addrBind;
+    const std::string m_addr_name;
     //! Whether this peer is an inbound onion, i.e. connected via our Tor onion service.
     const bool m_inbound_onion;
     std::atomic<int> nVersion{0};
@@ -616,10 +616,10 @@ public:
     // SYSCOIN
     // Challenge sent in VERSION to be answered with MNAUTH (only happens between MNs)
     mutable RecursiveMutex cs_mnauth;
-    uint256 sentMNAuthChallenge;
-    uint256 receivedMNAuthChallenge;
-    uint256 verifiedProRegTxHash;
-    uint256 verifiedPubKeyHash;
+    uint256 sentMNAuthChallenge GUARDED_BY(cs_mnauth);
+    uint256 receivedMNAuthChallenge GUARDED_BY(cs_mnauth);
+    uint256 verifiedProRegTxHash GUARDED_BY(cs_mnauth);
+    uint256 verifiedPubKeyHash GUARDED_BY(cs_mnauth);
 
     // If true, we will announce/send him plain recovered sigs (usually true for full nodes)
     std::atomic<bool> fSendRecSigs{false};
@@ -709,18 +709,54 @@ public:
     }
     void CloseSocketDisconnect();
 
-    void copyStats(CNodeStats &stats, const std::vector<bool> &m_asmap);
+    void CopyStats(CNodeStats& stats);
 
     ServiceFlags GetLocalServices() const
     {
         return nLocalServices;
     }
 
-    std::string GetAddrName() const;
-    //! Sets the addrName only if it was not previously set
-    void MaybeSetAddrName(const std::string& addrNameIn);
     // SYSCOIN
     bool CanRelay() const { LOCK(cs_mnauth); return !m_masternode_connection || m_masternode_iqr_connection; }
+    uint256 GetSentMNAuthChallenge() const {
+        LOCK(cs_mnauth);
+        return sentMNAuthChallenge;
+    }
+
+    uint256 GetReceivedMNAuthChallenge() const {
+        LOCK(cs_mnauth);
+        return receivedMNAuthChallenge;
+    }
+
+    uint256 GetVerifiedProRegTxHash() const {
+        LOCK(cs_mnauth);
+        return verifiedProRegTxHash;
+    }
+
+    uint256 GetVerifiedPubKeyHash() const {
+        LOCK(cs_mnauth);
+        return verifiedPubKeyHash;
+    }
+
+    void SetSentMNAuthChallenge(const uint256& newSentMNAuthChallenge) {
+        LOCK(cs_mnauth);
+        sentMNAuthChallenge = newSentMNAuthChallenge;
+    }
+
+    void SetReceivedMNAuthChallenge(const uint256& newReceivedMNAuthChallenge) {
+        LOCK(cs_mnauth);
+        receivedMNAuthChallenge = newReceivedMNAuthChallenge;
+    }
+
+    void SetVerifiedProRegTxHash(const uint256& newVerifiedProRegTxHash) {
+        LOCK(cs_mnauth);
+        verifiedProRegTxHash = newVerifiedProRegTxHash;
+    }
+
+    void SetVerifiedPubKeyHash(const uint256& newVerifiedPubKeyHash) {
+        LOCK(cs_mnauth);
+        verifiedPubKeyHash = newVerifiedPubKeyHash;
+    }
     bool IsMasternodeConnection() const { LOCK(cs_mnauth); return m_masternode_connection; }
     std::string ConnectionTypeAsString() const { return ::ConnectionTypeAsString(m_conn_type); }
 
@@ -753,10 +789,7 @@ private:
     //! service advertisements.
     const ServiceFlags nLocalServices;
 
-    std::list<CNetMessage> vRecvMsg;  // Used only by SocketHandler thread
-
-    mutable RecursiveMutex cs_addrName;
-    std::string addrName GUARDED_BY(cs_addrName);
+    std::list<CNetMessage> vRecvMsg; // Used only by SocketHandler thread
 
     // Our address, as reported by the peer
     CService addrLocal GUARDED_BY(cs_addrLocal);
@@ -828,10 +861,12 @@ public:
         std::vector<NetWhitebindPermissions> vWhiteBinds;
         std::vector<CService> vBinds;
         std::vector<CService> onion_binds;
+        /// True if the user did not specify -bind= or -whitebind= and thus
+        /// we should bind on `0.0.0.0` (IPv4) and `::` (IPv6).
+        bool bind_on_any;
         bool m_use_addrman_outgoing = true;
         std::vector<std::string> m_specified_outgoing;
         std::vector<std::string> m_added_nodes;
-        std::vector<bool> m_asmap;
         bool m_i2p_accept_incoming;
     };
 
@@ -844,7 +879,7 @@ public:
         nMaxAddnode = connOptions.nMaxAddnode;
         nMaxFeeler = connOptions.nMaxFeeler;
         m_max_outbound = m_max_outbound_full_relay + m_max_outbound_block_relay + nMaxFeeler;
-        clientInterface = connOptions.uiInterface;
+        m_client_interface = connOptions.uiInterface;
         m_banman = connOptions.m_banman;
         m_msgproc = connOptions.m_msgproc;
         nSendBufferMaxSize = connOptions.nSendBufferMaxSize;
@@ -862,7 +897,7 @@ public:
         m_onion_binds = connOptions.onion_binds;
     }
 
-    CConnman(uint64_t seed0, uint64_t seed1, CAddrMan& addrman, bool network_active = true);
+    CConnman(uint64_t seed0, uint64_t seed1, AddrMan& addrman, bool network_active = true);
     ~CConnman();
     bool Start(CScheduler& scheduler, const Options& options);
 
@@ -1001,7 +1036,7 @@ public:
     void SetMasternodeQuorumRelayMembers(uint8_t llmqType, const uint256& quorumHash, const std::set<uint256>& proTxHashes);
     void SetMasternodeQuorumNodes(uint8_t llmqType, const uint256& quorumHash, const std::set<uint256>& proTxHashes);
     bool HasMasternodeQuorumNodes(uint8_t llmqType, const uint256& quorumHash);
-    void GetMasternodeQuorums(uint8_t llmqType, std::set<uint256> &result);
+    std::set<uint256> GetMasternodeQuorums(uint8_t llmqType);
     // also returns QWATCH nodes
     void GetMasternodeQuorumNodes(uint8_t llmqType, const uint256& quorumHash, std::set<NodeId> &result) const;
     void RemoveMasternodeQuorumNodes(uint8_t llmqType, const uint256& quorumHash);
@@ -1016,6 +1051,7 @@ public:
      *
      * @param[in]   address     Address of node to try connecting to
      * @param[in]   conn_type   ConnectionType::OUTBOUND or ConnectionType::BLOCK_RELAY
+     *                          or ConnectionType::ADDR_FETCH
      * @return      bool        Returns false if there are no available
      *                          slots for this connection:
      *                          - conn_type not a supported ConnectionType
@@ -1074,10 +1110,8 @@ public:
     void RelayOtherInv(const CInv &inv, const int minProtoVersion = MIN_PEER_PROTO_VERSION);
     std::chrono::microseconds PoissonNextSendInbound(std::chrono::microseconds now, std::chrono::seconds average_interval);
 
-    void SetAsmap(std::vector<bool> asmap) { addrman.m_asmap = std::move(asmap); }
-
     /** Return true if we should disconnect the peer for failing an inactivity check. */
-    bool ShouldRunInactivityChecks(const CNode& node, std::optional<int64_t> now=std::nullopt) const;
+    bool ShouldRunInactivityChecks(const CNode& node, int64_t secs_now) const;
 
 private:
     struct ListenSocket {
@@ -1091,10 +1125,7 @@ private:
 
     bool BindListenPort(const CService& bindAddr, bilingual_str& strError, NetPermissionFlags permissions);
     bool Bind(const CService& addr, unsigned int flags, NetPermissionFlags permissions);
-    bool InitBinds(
-        const std::vector<CService>& binds,
-        const std::vector<NetWhitebindPermissions>& whiteBinds,
-        const std::vector<CService>& onion_binds);
+    bool InitBinds(const Options& options);
 
     void ThreadOpenAddedConnections();
     void AddAddrFetch(const std::string& strDest);
@@ -1187,7 +1218,7 @@ private:
     std::vector<ListenSocket> vhListenSocket;
     std::atomic<bool> fNetworkActive{true};
     bool fAddressesInitialized{false};
-    CAddrMan& addrman;
+    AddrMan& addrman;
     std::deque<std::string> m_addr_fetches GUARDED_BY(m_addr_fetches_mutex);
     RecursiveMutex m_addr_fetches_mutex;
     std::vector<std::string> vAddedNodes GUARDED_BY(cs_vAddedNodes);
@@ -1260,7 +1291,7 @@ private:
     int nMaxFeeler;
     int m_max_outbound;
     bool m_use_addrman_outgoing;
-    CClientUIInterface* clientInterface;
+    CClientUIInterface* m_client_interface;
     NetEventsInterface* m_msgproc;
     /** Pointer to this node's banman. May be nullptr - check existence before dereferencing. */
     BanMan* m_banman;
@@ -1351,7 +1382,7 @@ struct NodeEvictionCandidate
     uint64_t nKeyedNetGroup;
     bool prefer_evict;
     bool m_is_local;
-    bool m_is_onion;
+    Network m_network;
 };
 
 /**
@@ -1369,20 +1400,20 @@ struct NodeEvictionCandidate
  * longest, to replicate the non-eviction implicit behavior and preclude attacks
  * that start later.
  *
- * Half of these protected spots (1/4 of the total) are reserved for onion peers
- * connected via our tor control service, if any, sorted by longest uptime, even
- * if they're not longest uptime overall. Any remaining slots of the 1/4 are
- * then allocated to protect localhost peers, if any (or up to 2 localhost peers
- * if no slots remain and 2 or more onion peers were protected), sorted by
- * longest uptime, as manually configured hidden services not using
- * `-bind=addr[:port]=onion` will not be detected as inbound onion connections.
+ * Half of these protected spots (1/4 of the total) are reserved for the
+ * following categories of peers, sorted by longest uptime, even if they're not
+ * longest uptime overall:
  *
- * This helps protect onion peers, which tend to be otherwise disadvantaged
- * under our eviction criteria for their higher min ping times relative to IPv4
- * and IPv6 peers, and favorise the diversity of peer connections.
+ * - onion peers connected via our tor control service
  *
- * This function was extracted from SelectNodeToEvict() to be able to test the
- * ratio-based protection logic deterministically.
+ * - localhost peers, as manually configured hidden services not using
+ *   `-bind=addr[:port]=onion` will not be detected as inbound onion connections
+ *
+ * - I2P peers
+ *
+ * This helps protect these privacy network peers, which tend to be otherwise
+ * disadvantaged under our eviction criteria for their higher min ping times
+ * relative to IPv4/IPv6 peers, and favorise the diversity of peer connections.
  */
 void ProtectEvictionCandidatesByRatio(std::vector<NodeEvictionCandidate>& vEvictionCandidates);
 

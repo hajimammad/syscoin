@@ -4,18 +4,28 @@
 
 #include <qt/walletframe.h>
 
+#include <node/ui_interface.h>
+#include <psbt.h>
+#include <qt/guiutil.h>
 #include <qt/overviewpage.h>
+#include <qt/psbtoperationsdialog.h>
 #include <qt/walletmodel.h>
+// SYSCOIN
+#include <qt/masternodelist.h>
 #include <qt/walletview.h>
+#include <util/system.h>
 
 #include <cassert>
 
+#include <QApplication>
+#include <QClipboard>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QVBoxLayout>
-
+// SYSCOIN 
+#include <QSettings>
 WalletFrame::WalletFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     : QFrame(parent),
       platformStyle(_platformStyle),
@@ -43,6 +53,9 @@ WalletFrame::WalletFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     no_wallet_group->setLayout(no_wallet_layout);
 
     walletStack->addWidget(no_wallet_group);
+    // SYSCOIN
+    masternodeListPage = new MasternodeList();
+    walletStack->addWidget(masternodeListPage);
 }
 
 WalletFrame::~WalletFrame()
@@ -52,20 +65,21 @@ WalletFrame::~WalletFrame()
 void WalletFrame::setClientModel(ClientModel *_clientModel)
 {
     this->clientModel = _clientModel;
+    // SYSCOIN
+    masternodeListPage->setClientModel(_clientModel);
 
     for (auto i = mapWalletViews.constBegin(); i != mapWalletViews.constEnd(); ++i) {
         i.value()->setClientModel(_clientModel);
     }
 }
 
-bool WalletFrame::addWallet(WalletModel* walletModel, WalletView* walletView)
+bool WalletFrame::addView(WalletView* walletView)
 {
-    if (!clientModel || !walletModel) return false;
+    if (!clientModel) return false;
 
-    if (mapWalletViews.count(walletModel) > 0) return false;
+    if (mapWalletViews.count(walletView->getWalletModel()) > 0) return false;
 
     walletView->setClientModel(clientModel);
-    walletView->setWalletModel(walletModel);
     walletView->showOutOfSyncWarning(bOutOfSync);
 
     WalletView* current_wallet_view = currentWalletView();
@@ -76,8 +90,12 @@ bool WalletFrame::addWallet(WalletModel* walletModel, WalletView* walletView)
     }
 
     walletStack->addWidget(walletView);
-    mapWalletViews[walletModel] = walletView;
-
+    mapWalletViews[walletView->getWalletModel()] = walletView;
+    // SYSCOIN
+    QSettings settings;
+    if (settings.value("fShowMasternodesTab").toBool()) {
+        masternodeListPage->setWalletModel(walletView->getWalletModel());
+    }
     return true;
 }
 
@@ -103,7 +121,8 @@ void WalletFrame::setCurrentWallet(WalletModel* wallet_model)
     walletView->updateGeometry();
 
     walletStack->setCurrentWidget(walletView);
-    walletView->updateEncryptionStatus();
+
+    Q_EMIT currentWalletSet();
 }
 
 void WalletFrame::removeWallet(WalletModel* wallet_model)
@@ -157,6 +176,10 @@ void WalletFrame::gotoHistoryPage()
 void WalletFrame::gotoMasternodePage()
 {
     QMap<WalletModel*, WalletView*>::const_iterator i;
+    if (mapWalletViews.empty()) {
+        walletStack->setCurrentWidget(masternodeListPage);
+        return;
+    }
     for (i = mapWalletViews.constBegin(); i != mapWalletViews.constEnd(); ++i)
         i.value()->gotoMasternodePage();
 }
@@ -190,10 +213,39 @@ void WalletFrame::gotoVerifyMessageTab(QString addr)
 
 void WalletFrame::gotoLoadPSBT(bool from_clipboard)
 {
-    WalletView *walletView = currentWalletView();
-    if (walletView) {
-        walletView->gotoLoadPSBT(from_clipboard);
+    std::string data;
+
+    if (from_clipboard) {
+        std::string raw = QApplication::clipboard()->text().toStdString();
+        bool invalid;
+        data = DecodeBase64(raw, &invalid);
+        if (invalid) {
+            Q_EMIT message(tr("Error"), tr("Unable to decode PSBT from clipboard (invalid base64)"), CClientUIInterface::MSG_ERROR);
+            return;
+        }
+    } else {
+        QString filename = GUIUtil::getOpenFileName(this,
+            tr("Load Transaction Data"), QString(),
+            tr("Partially Signed Transaction (*.psbt)"), nullptr);
+        if (filename.isEmpty()) return;
+        if (GetFileSize(filename.toLocal8Bit().data(), MAX_FILE_SIZE_PSBT) == MAX_FILE_SIZE_PSBT) {
+            Q_EMIT message(tr("Error"), tr("PSBT file must be smaller than 100 MiB"), CClientUIInterface::MSG_ERROR);
+            return;
+        }
+        std::ifstream in(filename.toLocal8Bit().data(), std::ios::binary);
+        data = std::string(std::istreambuf_iterator<char>{in}, {});
     }
+
+    std::string error;
+    PartiallySignedTransaction psbtx;
+    if (!DecodeRawPSBT(psbtx, data, error)) {
+        Q_EMIT message(tr("Error"), tr("Unable to decode PSBT") + "\n" + QString::fromStdString(error), CClientUIInterface::MSG_ERROR);
+        return;
+    }
+
+    auto dlg = new PSBTOperationsDialog(this, currentWalletModel(), clientModel);
+    dlg->openWithPSBT(psbtx);
+    GUIUtil::ShowModalDialogAndDeleteOnClose(dlg);
 }
 
 void WalletFrame::encryptWallet()
@@ -247,9 +299,4 @@ WalletModel* WalletFrame::currentWalletModel() const
 {
     WalletView* wallet_view = currentWalletView();
     return wallet_view ? wallet_view->getWalletModel() : nullptr;
-}
-
-void WalletFrame::outOfSyncWarningClicked()
-{
-    Q_EMIT requestedSyncWarningInfo();
 }

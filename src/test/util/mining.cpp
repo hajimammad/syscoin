@@ -38,7 +38,7 @@ std::vector<std::shared_ptr<CBlock>> CreateBlockChain(size_t total_height, const
         coinbase_tx.vout.resize(1);
         coinbase_tx.vout[0].scriptPubKey = P2WSH_OP_TRUE;
         // SYSCOIN
-        coinbase_tx.vout[0].nValue = GetBlockSubsidy(height + 1, params);
+        coinbase_tx.vout[0].nValue = GetBlockSubsidy(height + 1, params.GetConsensus());
         coinbase_tx.vin[0].scriptSig = CScript() << (height + 1) << OP_0;
         block.vtx = {MakeTransactionRef(std::move(coinbase_tx))};
 
@@ -75,12 +75,12 @@ CTxIn MineBlock(const NodeContext& node, const CScript& coinbase_scriptPubKey)
 std::shared_ptr<CBlock> PrepareBlock(const NodeContext& node, const CScript& coinbase_scriptPubKey)
 {
     auto block = std::make_shared<CBlock>(
-        BlockAssembler{::ChainstateActive(), *Assert(node.mempool), Params()}
+        BlockAssembler{Assert(node.chainman)->ActiveChainstate(), *Assert(node.mempool), Params()}
             .CreateNewBlock(coinbase_scriptPubKey)
             ->block);
 
     LOCK(cs_main);
-    block->nTime = ::ChainActive().Tip()->GetMedianTimePast() + 1;
+    block->nTime = Assert(node.chainman)->ActiveChain().Tip()->GetMedianTimePast() + 1;
     block->hashMerkleRoot = BlockMerkleRoot(*block);
 
     return block;

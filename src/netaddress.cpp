@@ -165,7 +165,7 @@ void CNetAddr::SetLegacyIPv6(Span<const uint8_t> ipv6)
 }
 
 /**
- * Create an "internal" address that represents a name or FQDN. CAddrMan uses
+ * Create an "internal" address that represents a name or FQDN. AddrMan uses
  * these fake addresses to keep track of which DNS seeds were used.
  * @returns Whether or not the operation was successful.
  * @see NET_INTERNAL, INTERNAL_IN_IPV6_PREFIX, CNetAddr::IsInternal(), CNetAddr::IsRFC4193()
@@ -489,7 +489,7 @@ bool CNetAddr::IsValid() const
  */
 bool CNetAddr::IsRoutable() const
 {
-    return IsValid() && !(IsRFC1918() || IsRFC2544() || IsRFC3927() || IsRFC4862() || IsRFC6598() || IsRFC5737() || (IsRFC4193() && !IsTor()) || IsRFC4843() || IsRFC7343() || IsLocal() || IsInternal());
+    return IsValid() && !(IsRFC1918() || IsRFC2544() || IsRFC3927() || IsRFC4862() || IsRFC6598() || IsRFC5737() || IsRFC4193() || IsRFC4843() || IsRFC7343() || IsLocal() || IsInternal());
 }
 
 /**
@@ -663,7 +663,7 @@ bool CNetAddr::GetInAddr(struct in_addr* pipv4Addr) const
 }
 
 /**
- * Try to get our IPv6 address.
+ * Try to get our IPv6 (or CJDNS) address.
  *
  * @param[out] pipv6Addr The in6_addr struct to which to copy.
  *
@@ -674,7 +674,7 @@ bool CNetAddr::GetInAddr(struct in_addr* pipv4Addr) const
  */
 bool CNetAddr::GetIn6Addr(struct in6_addr* pipv6Addr) const
 {
-    if (!IsIPv6()) {
+    if (!IsIPv6() && !IsCJDNS()) {
         return false;
     }
     assert(sizeof(*pipv6Addr) == m_addr.size());
@@ -794,8 +794,14 @@ std::vector<unsigned char> CNetAddr::GetGroup(const std::vector<bool> &asmap) co
         vchRet.push_back((ipv4 >> 24) & 0xFF);
         vchRet.push_back((ipv4 >> 16) & 0xFF);
         return vchRet;
-    } else if (IsTor() || IsI2P() || IsCJDNS()) {
+    } else if (IsTor() || IsI2P()) {
         nBits = 4;
+    } else if (IsCJDNS()) {
+        // Treat in the same way as Tor and I2P because the address in all of
+        // them is "random" bytes (derived from a public key). However in CJDNS
+        // the first byte is a constant 0xfc, so the random bytes come after it.
+        // Thus skip the constant 8 bits at the start.
+        nBits = 12;
     } else if (IsHeNet()) {
         // for he.net, use /36 groups
         nBits = 36;
@@ -890,6 +896,11 @@ int CNetAddr::GetReachabilityFrom(const CNetAddr *paddrPartner) const
     case NET_I2P:
         switch (ourNet) {
         case NET_I2P: return REACH_PRIVATE;
+        default: return REACH_DEFAULT;
+        }
+    case NET_CJDNS:
+        switch (ourNet) {
+        case NET_CJDNS: return REACH_PRIVATE;
         default: return REACH_DEFAULT;
         }
     case NET_TEREDO:
@@ -993,7 +1004,7 @@ bool CService::GetSockAddr(struct sockaddr* paddr, socklen_t *addrlen) const
         paddrin->sin_port = htons(port);
         return true;
     }
-    if (IsIPv6()) {
+    if (IsIPv6() || IsCJDNS()) {
         if (*addrlen < (socklen_t)sizeof(struct sockaddr_in6))
             return false;
         *addrlen = sizeof(struct sockaddr_in6);
@@ -1037,11 +1048,6 @@ std::string CService::ToStringIPPort() const
 std::string CService::ToString() const
 {
     return ToStringIPPort();
-}
-// SYSCOIN
-void CService::SetPort(uint16_t portIn)
-{
-    port = portIn;
 }
 CSubNet::CSubNet():
     valid(false)
@@ -1245,9 +1251,4 @@ bool operator==(const CSubNet& a, const CSubNet& b)
 bool operator<(const CSubNet& a, const CSubNet& b)
 {
     return (a.network < b.network || (a.network == b.network && memcmp(a.netmask, b.netmask, 16) < 0));
-}
-
-bool SanityCheckASMap(const std::vector<bool>& asmap)
-{
-    return SanityCheckASMap(asmap, 128); // For IP address lookups, the input is 128 bits
 }

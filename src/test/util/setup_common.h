@@ -115,16 +115,27 @@ class CScript;
 /**
  * Testing fixture that pre-creates a 100-block REGTEST-mode block chain
  */
-struct TestChain100Setup : public RegTestingSetup {
+struct TestChain100Setup : public TestingSetup {
     // SYSCOIN
-    TestChain100Setup(int count = COINBASE_MATURITY);
+    TestChain100Setup(int count = COINBASE_MATURITY, const std::vector<const char*>& extra_args = {});
 
     /**
      * Create a new block with just given transactions, coinbase paying to
      * scriptPubKey, and try to add it to the current chain.
+     * If no chainstate is specified, default to the active.
      */
     CBlock CreateAndProcessBlock(const std::vector<CMutableTransaction>& txns,
-                                 const CScript& scriptPubKey);
+                                 const CScript& scriptPubKey,
+                                 CChainState* chainstate = nullptr);
+
+    /**
+     * Create a new block with just given transactions, coinbase paying to
+     * scriptPubKey.
+     */
+    CBlock CreateBlock(
+        const std::vector<CMutableTransaction>& txns,
+        const CScript& scriptPubKey,
+        CChainState& chainstate);
 
     //! Mine a series of new blocks on the active chain.
     void mineBlocks(int num_blocks);
@@ -147,8 +158,6 @@ struct TestChain100Setup : public RegTestingSetup {
                                                       CScript output_destination,
                                                       CAmount output_amount = CAmount(1 * COIN),
                                                       bool submit = true);
-
-    ~TestChain100Setup();
 
     std::vector<CTransactionRef> m_coinbase_txns; // For convenience, coinbase transactions
     CKey coinbaseKey; // private/public key needed to spend coinbase transactions
@@ -238,4 +247,4 @@ private:
     const std::string m_reason;
 };
 
-#endif
+#endif // SYSCOIN_TEST_UTIL_SETUP_COMMON_H

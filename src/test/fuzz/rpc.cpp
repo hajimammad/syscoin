@@ -79,6 +79,7 @@ const std::vector<std::string> RPC_COMMANDS_NOT_SAFE_FOR_FUZZING{
     "savemempool",           // disabled as a precautionary measure: may take a file path argument in the future
     "setban",                // avoid DNS lookups
     "stop",                  // avoid shutdown state
+    "getnevmblockchaininfo",
 };
 
 // RPC commands which are safe for fuzzing.
@@ -132,9 +133,7 @@ const std::vector<std::string> RPC_COMMANDS_SAFE_FOR_FUZZING{
     "assetinfo",
     "listassets",
     "assetallocationverifyzdag",
-    "syscoinsetethstatus",
     "syscoinsetethheaders",
-    "syscoinclearethheaders",
     "syscoinstopgeth",
     "syscoinstartgeth",
     "syscoincheckmint",
@@ -351,7 +350,7 @@ std::string ConsumeScalarRPCArgument(FuzzedDataProvider& fuzzed_data_provider)
 std::string ConsumeArrayRPCArgument(FuzzedDataProvider& fuzzed_data_provider)
 {
     std::vector<std::string> scalar_arguments;
-    while (fuzzed_data_provider.ConsumeBool()) {
+    LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 100) {
         scalar_arguments.push_back(ConsumeScalarRPCArgument(fuzzed_data_provider));
     }
     return "[\"" + Join(scalar_arguments, "\",\"") + "\"]";
@@ -405,7 +404,7 @@ FUZZ_TARGET_INIT(rpc, initialize_rpc)
         return;
     }
     std::vector<std::string> arguments;
-    while (fuzzed_data_provider.ConsumeBool()) {
+    LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 100) {
         arguments.push_back(ConsumeRPCArgument(fuzzed_data_provider));
     }
     try {

@@ -141,7 +141,7 @@ public:
     template <typename Stream>
     void Unserialize(Stream& s)
     {
-        unsigned int len = ::ReadCompactSize(s);
+        const unsigned int len(::ReadCompactSize(s));
         if (len <= SIZE) {
             s.read((char*)vch, len);
             if (len != size()) {
@@ -149,9 +149,7 @@ public:
             }
         } else {
             // invalid pubkey, skip available data
-            char dummy;
-            while (len--)
-                s.read(&dummy, 1);
+            s.ignore(len);
             Invalidate();
         }
     }
@@ -230,9 +228,13 @@ public:
     XOnlyPubKey& operator=(const XOnlyPubKey&) = default;
 
     /** Determine if this pubkey is fully valid. This is true for approximately 50% of all
-     *  possible 32-byte arrays. If false, VerifySchnorr and CreatePayToContract will always
-     *  fail. */
+     *  possible 32-byte arrays. If false, VerifySchnorr, CheckTapTweak and CreateTapTweak
+     *  will always fail. */
     bool IsFullyValid() const;
+
+    /** Test whether this is the 0 key (the result of default construction). This implies
+     *  !IsFullyValid(). */
+    bool IsNull() const { return m_keydata.IsNull(); }
 
     /** Construct an x-only pubkey from exactly 32 bytes. */
     explicit XOnlyPubKey(Span<const unsigned char> bytes);
@@ -262,6 +264,11 @@ public:
 
     /** Construct a Taproot tweaked output point with this point as internal key. */
     std::optional<std::pair<XOnlyPubKey, bool>> CreateTapTweak(const uint256* merkle_root) const;
+
+    /** Returns a list of CKeyIDs for the CPubKeys that could have been used to create this XOnlyPubKey.
+     * This is needed for key lookups since keys are indexed by CKeyID.
+     */
+    std::vector<CKeyID> GetKeyIDs() const;
 
     const unsigned char& operator[](int pos) const { return *(m_keydata.begin() + pos); }
     const unsigned char* data() const { return m_keydata.begin(); }
@@ -311,5 +318,11 @@ public:
     ECCVerifyHandle();
     ~ECCVerifyHandle();
 };
+
+typedef struct secp256k1_context_struct secp256k1_context;
+
+/** Access to the internal secp256k1 context used for verification. Only intended to be used
+ *  by key.cpp. */
+const secp256k1_context* GetVerifyContext();
 
 #endif // SYSCOIN_PUBKEY_H
